@@ -6,7 +6,7 @@ description: |-
   Create a Virtual Machine scale set.
 ---
 
-# azurerm\_virtual\_machine\_scale\_set
+# azurerm_virtual_machine_scale_set
 
 Create a virtual machine scale set.
 
@@ -76,11 +76,28 @@ resource "azurerm_lb_nat_pool" "lbnatpool" {
   frontend_ip_configuration_name = "PublicIPAddress"
 }
 
+resource "azurerm_lb_probe" "test" {
+  resource_group_name = "${azurerm_resource_group.test.name}"
+  loadbalancer_id     = "${azurerm_lb.test.id}"
+  name                = "http-probe"
+  request_path        = "/health"
+  port                = 8080
+}
+
 resource "azurerm_virtual_machine_scale_set" "test" {
   name                = "mytestscaleset-1"
   location            = "${azurerm_resource_group.test.location}"
   resource_group_name = "${azurerm_resource_group.test.name}"
-  upgrade_policy_mode = "Manual"
+
+  # automatic rolling upgrade
+  upgrade_policy_mode  = "Rolling"
+  automatic_os_upgrade = true
+  rolling_upgrade_policy {
+    max_batch_instance_percent              = 20
+    max_unhealthy_instance_percent          = 20
+    max_unhealthy_upgraded_instance_percent = 5
+    pause_time_between_batches              = "PT0S"
+  }
 
   sku {
     name     = "Standard_A0"
@@ -103,10 +120,10 @@ resource "azurerm_virtual_machine_scale_set" "test" {
   }
 
   storage_profile_data_disk {
-    lun 		   = 0
-    caching        = "ReadWrite"
-    create_option  = "Empty"
-    disk_size_gb   = 10
+    lun             = 0
+    caching         = "ReadWrite"
+    create_option   = "Empty"
+    disk_size_gb    = 10
   }
 
   os_profile {
@@ -134,6 +151,9 @@ resource "azurerm_virtual_machine_scale_set" "test" {
       load_balancer_backend_address_pool_ids = ["${azurerm_lb_backend_address_pool.bpepool.id}"]
       load_balancer_inbound_nat_rules_ids    = ["${element(azurerm_lb_nat_pool.lbnatpool.*.id, count.index)}"]
     }
+
+    # required when using rolling upgrade policy
+    health_probe_id = "${azurerm_lb_probe.test.id}"
   }
 
   tags {
@@ -244,10 +264,10 @@ The following arguments are supported:
 * `resource_group_name` - (Required) The name of the resource group in which to create the virtual machine scale set. Changing this forces a new resource to be created.
 * `location` - (Required) Specifies the supported Azure location where the resource exists. Changing this forces a new resource to be created.
 * `sku` - (Required) A sku block as documented below.
-* `upgrade_policy_mode` - (Required) Specifies the mode of an upgrade to virtual machines in the scale set. Possible values, `Manual` or `Automatic`.
-* `overprovision` - (Optional) Specifies whether the virtual machine scale set should be overprovisioned.
-* `single_placement_group` - (Optional) Specifies whether the scale set is limited to a single placement group with a maximum size of 100 virtual machines. If set to false, managed disks must be used. Default is true. Changing this forces a
-    new resource to be created. See [documentation](http://docs.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-placement-groups) for more information.
+* `upgrade_policy_mode` - (Required) Specifies the mode of an upgrade to virtual machines in the scale set. Possible values, `Rolling`, `Manual`, or `Automatic`. When choosing `Rolling`, you will need to set a health probe.
+* `automatic_os_upgrade` - (Optional) Automatic OS patches can be applied by Azure to your scaleset. This is particularly useful when `upgrade_policy_mode` is set to `Rolling`. Defaults to `false`.
+* `rolling_upgrade_policy` - (Optional) Ignored unless `upgrade_policy_mode` is set to `Rolling`.* `overprovision` - (Optional) Specifies whether the virtual machine scale set should be overprovisioned.
+* `single_placement_group` - (Optional) Specifies whether the scale set is limited to a single placement group with a maximum size of 100 virtual machines. If set to false, managed disks must be used. Default is true. Changing this forces a new resource to be created. See [documentation](http://docs.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-placement-groups) for more information.
 * `os_profile` - (Required) A Virtual Machine OS Profile block as documented below.
 * `os_profile_secrets` - (Optional) A collection of Secret blocks as documented below.
 * `os_profile_windows_config` - (Required, when a windows machine) A Windows config block as documented below.
@@ -303,6 +323,13 @@ resource "azurerm_virtual_machine_scale_set" "test" {
   }
 ```
 
+`rolling_upgrade_policy` supports the following:
+
+* `max_batch_instance_percent` - (Optional) The maximum percent of total virtual machine instances that will be upgraded simultaneously by the rolling upgrade in one batch. As this is a maximum, unhealthy instances in previous or future batches can cause the percentage of instances in a batch to decrease to ensure higher reliability. Defaults to `20`.
+* `max_unhealthy_instance_percent` - (Optional) The maximum percentage of the total virtual machine instances in the scale set that can be simultaneously unhealthy, either as a result of being upgraded, or by being found in an unhealthy state by the virtual machine health checks before the rolling upgrade aborts. This constraint will be checked prior to starting any batch. Defaults to `20`.
+* `max_unhealthy_upgraded_instance_percent` - (Optional) The maximum percentage of upgraded virtual machine instances that can be found to be in an unhealthy state. This check will happen after each batch is upgraded. If this percentage is ever exceeded, the rolling update aborts. Defaults to `5`.
+* `pause_time_between_batches` - (Optional) The wait time between completing the update for all virtual machines in one batch and starting the next batch. The time duration should be specified in ISO 8601 format for [duration](https://en.wikipedia.org/wiki/ISO_8601#Durations). Defaults to `0` seconds represented as `PT0S`.
+
 `os_profile` supports the following:
 
 * `computer_name_prefix` - (Required) Specifies the computer name prefix for all of the virtual machines in the scale set. Computer name prefixes must be 1 to 9 characters long for windows images and 1 - 58 for linux. Changing this forces a new resource to be created.
@@ -319,7 +346,6 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 
 * `certificate_url` - (Required) It is the Base64 encoding of a JSON Object that which is encoded in UTF-8 of which the contents need to be `data`, `dataType` and `password`.
 * `certificate_store` - (Required, on windows machines) Specifies the certificate store on the Virtual Machine where the certificate should be added to.
-
 
 `os_profile_windows_config` supports the following:
 
@@ -353,8 +379,8 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 * `primary` - (Required) Indicates whether network interfaces created from the network interface configuration will be the primary NIC of the VM.
 * `ip_configuration` - (Required) An ip_configuration block as documented below
 * `network_security_group_id` - (Optional) Specifies the identifier for the network security group.
-* `accelerated_networking` - (Optional) Specifies whether to enable accelerated networking or not. Defaults to
-`false`.
+* `accelerated_networking` - (Optional) Specifies whether to enable accelerated networking or not. Defaults to `false`.
+* `health_probe_id` - (Optional) Specifies the identifier for the load balancer health probe. Required when using `Rolling` as your `upgrade_policy_mode`.
 
 `ip_configuration` supports the following:
 
@@ -364,8 +390,7 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 * `load_balancer_backend_address_pool_ids` - (Optional) Specifies an array of references to backend address pools of load balancers. A scale set can reference backend address pools of one public and one internal load balancer. Multiple scale sets cannot use the same load balancer.
 * `load_balancer_inbound_nat_rules_ids` - (Optional) Specifies an array of references to inbound NAT rules for load balancers.
 * `primary` - (Optional) Specifies if this ip_configuration is the primary one.
-* `public_ip_address_configuration` - (Optional) describes a virtual machines scale set IP Configuration's
- PublicIPAddress configuration. The public_ip_address_configuration is documented below.
+* `public_ip_address_configuration` - (Optional) describes a virtual machines scale set IP Configuration's PublicIPAddress configuration. The public_ip_address_configuration is documented below.
 
 `public_ip_address_configuration` supports the following:
 
@@ -380,9 +405,7 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 * `managed_disk_type` - (Optional) Specifies the type of managed disk to create. Value you must be either `Standard_LRS` or `Premium_LRS`. Cannot be used when `vhd_containers` or `image` is specified.
 * `create_option` - (Required) Specifies how the virtual machine should be created. The only possible option is `FromImage`.
 * `caching` - (Optional) Specifies the caching requirements. Possible values include: `None` (default), `ReadOnly`, `ReadWrite`.
-* `image` - (Optional) Specifies the blob uri for user image. A virtual machine scale set creates an os disk in the same container as the user image.
-                       Updating the osDisk image causes the existing disk to be deleted and a new one created with the new image. If the VM scale set is in Manual upgrade mode then the virtual machines are not updated until they have manualUpgrade applied to them.
-                       When setting this field `os_type` needs to be specified. Cannot be used when `vhd_containers`, `managed_disk_type` or `storage_profile_image_reference ` are specified.
+* `image` - (Optional) Specifies the blob uri for user image. A virtual machine scale set creates an os disk in the same container as the user image. Updating the osDisk image causes the existing disk to be deleted and a new one created with the new image. If the VM scale set is in Manual upgrade mode then the virtual machines are not updated until they have manualUpgrade applied to them. When setting this field `os_type` needs to be specified. Cannot be used when `vhd_containers`, `managed_disk_type` or `storage_profile_image_reference` are specified.
 * `os_type` - (Optional) Specifies the operating system Type, valid values are windows, linux.
 
 `storage_profile_data_disk` supports the following:
@@ -395,8 +418,7 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 
 `storage_profile_image_reference` supports the following:
 
-* `id` - (Optional) Specifies the ID of the (custom) image to use to create the virtual
-machine scale set, as in the [example below](#example-of-storage_profile_image_reference-with-id).
+* `id` - (Optional) Specifies the ID of the (custom) image to use to create the virtual machine scale set, as in the [example below](#example-of-storage_profile_image_reference-with-id).
 * `publisher` - (Optional) Specifies the publisher of the image used to create the virtual machines.
 * `offer` - (Optional) Specifies the offer of the image used to create the virtual machines.
 * `sku` - (Optional) Specifies the SKU of the image used to create the virtual machines.
@@ -406,7 +428,6 @@ machine scale set, as in the [example below](#example-of-storage_profile_image_r
 
 * `enabled`: (Required) Whether to enable boot diagnostics for the virtual machine.
 * `storage_uri`: (Required) Blob endpoint for the storage account to hold the virtual machine's diagnostic files. This must be the root of a storage account, and not a storage container.
-
 
 `extension` supports the following:
 
@@ -429,17 +450,17 @@ machine scale set, as in the [example below](#example-of-storage_profile_image_r
 ```hcl
 
 resource "azurerm_image" "test" {
-	name = "test"
+  name = "test"
   ...
 }
 
 resource "azurerm_virtual_machine_scale_set" "test" {
-	name = "test"
+  name = "test"
   ...
 
-	storage_profile_image_reference {
-		id = "${azurerm_image.test.id}"
-	}
+  storage_profile_image_reference {
+    id = "${azurerm_image.test.id}"
+  }
 
 ...
 ```
@@ -449,7 +470,6 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 The following attributes are exported:
 
 * `id` - The virtual machine scale set ID.
-
 
 ## Import
 

@@ -361,6 +361,32 @@ func TestAccAzureRMVirtualMachineScaleSet_customImage(t *testing.T) {
 	})
 }
 
+func TestAccAzureRMVirtualMachineScaleSet_rollingUpgradePolicy(t *testing.T) {
+	resource_name := "azurerm_virtual_machine_scale_set.test"
+	ri := acctest.RandInt()
+	config := testAccAzureRMVirtualMachineScaleSetRollingUpgradePolicyTemplate(ri, testLocation())
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testCheckAzureRMVirtualMachineScaleSetDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckAzureRMVirtualMachineScaleSetExists("azurerm_virtual_machine_scale_set.test"),
+					testCheckAzureRMVirtualMachineScaleSetHasLoadbalancer("azurerm_virtual_machine_scale_set.test"),
+					resource.TestCheckResourceAttr(resource_name, "automatic_os_upgrade", "true"),
+					resource.TestCheckResourceAttr(resource_name, "upgrade_policy_mode", "Rolling"),
+					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.max_batch_instance_percent", "20"),
+					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.max_unhealthy_instance_percent", "20"),
+					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.max_unhealthy_upgraded_instance_percent", "5"),
+					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.pause_time_between_batches", "PT0S"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccAzureRMVirtualMachineScaleSet_applicationGateway(t *testing.T) {
 	ri := acctest.RandInt()
 	config := testAccAzureRMVirtualMachineScaleSetApplicationGatewayTemplate(ri, testLocation())
@@ -961,7 +987,7 @@ resource "azurerm_virtual_machine_scale_set" "test" {
     tier = "Standard"
     capacity = 2
   }
-  
+
   os_profile {
     computer_name_prefix = "testvm-%d"
     admin_username = "myadmin"
@@ -2494,6 +2520,125 @@ resource "azurerm_virtual_machine_scale_set" "test" {
 `, rInt, location, rInt, rInt, rInt, rInt, rInt, rInt)
 }
 
+func testAccAzureRMVirtualMachineScaleSetRollingUpgradePolicyTemplate(rInt int, location string) string {
+	return fmt.Sprintf(`
+resource "azurerm_resource_group" "test" {
+  name     = "acctestrg-%d"
+  location = "%s"
+}
+
+resource "azurerm_virtual_network" "test" {
+  name                = "acctvn-%d"
+  address_space       = ["10.0.0.0/16"]
+  location            = "${azurerm_resource_group.test.location}"
+  resource_group_name = "${azurerm_resource_group.test.name}"
+}
+
+resource "azurerm_subnet" "test" {
+  name                 = "acctsub-%d"
+  resource_group_name  = "${azurerm_resource_group.test.name}"
+  virtual_network_name = "${azurerm_virtual_network.test.name}"
+  address_prefix       = "10.0.2.0/24"
+}
+
+resource "azurerm_storage_account" "test" {
+  name                     = "accsa%d"
+  resource_group_name      = "${azurerm_resource_group.test.name}"
+  location                 = "${azurerm_resource_group.test.location}"
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_storage_container" "test" {
+  name                  = "vhds"
+  resource_group_name   = "${azurerm_resource_group.test.name}"
+  storage_account_name  = "${azurerm_storage_account.test.name}"
+  container_access_type = "private"
+}
+
+resource "azurerm_lb" "test" {
+  name                = "acctestlb-%d"
+  location            = "${azurerm_resource_group.test.location}"
+  resource_group_name = "${azurerm_resource_group.test.name}"
+
+  frontend_ip_configuration {
+    name                          = "default"
+    subnet_id                     = "${azurerm_subnet.test.id}"
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_lb_backend_address_pool" "test" {
+  name                = "test"
+  resource_group_name = "${azurerm_resource_group.test.name}"
+  location            = "${azurerm_resource_group.test.location}"
+  loadbalancer_id     = "${azurerm_lb.test.id}"
+}
+
+resource "azurerm_lb_probe" "test" {
+  resource_group_name = "${azurerm_resource_group.test.name}"
+  loadbalancer_id     = "${azurerm_lb.test.id}"
+  name                = "ssh-probe"
+  protocol            = "Tcp"
+  port                = 22
+}
+
+resource "azurerm_virtual_machine_scale_set" "test" {
+  name                = "acctvmss-%d"
+  location            = "${azurerm_resource_group.test.location}"
+  resource_group_name = "${azurerm_resource_group.test.name}"
+  upgrade_policy_mode = "Rolling"
+  automatic_os_upgrade = false
+
+  rolling_upgrade_policy {
+    max_batch_instance_percent              = 20
+    max_unhealthy_instance_percent          = 20
+    max_unhealthy_upgraded_instance_percent = 5
+    pause_time_between_batches              = "PT0S"
+  }
+
+  sku {
+    name     = "Standard_D1_v2"
+    tier     = "Standard"
+    capacity = 1
+  }
+
+  os_profile {
+    computer_name_prefix = "testvm-%d"
+    admin_username       = "myadmin"
+    admin_password       = "Passwword1234"
+  }
+
+  network_profile {
+    name    = "TestNetworkProfile"
+    primary = true
+    health_probe_id = "${azurerm_lb_probe.test.id}"
+
+    ip_configuration {
+      name                                   = "TestIPConfiguration"
+      subnet_id                              = "${azurerm_subnet.test.id}"
+      load_balancer_backend_address_pool_ids = ["${azurerm_lb_backend_address_pool.test.id}"]
+    }
+  }
+
+  storage_profile_os_disk {
+    name           = "os-disk"
+    caching        = "ReadWrite"
+    create_option  = "FromImage"
+    vhd_containers = ["${azurerm_storage_account.test.primary_blob_endpoint}${azurerm_storage_container.test.name}"]
+  }
+
+  storage_profile_image_reference {
+    publisher = "Canonical"
+    offer     = "UbuntuServer"
+    sku       = "16.04-LTS"
+    version   = "latest"
+  }
+}
+
+`, rInt, location, rInt, rInt, rInt, rInt, rInt, rInt)
+}
+
 func testAccAzureRMVirtualMachineScaleSetOverProvisionTemplate(rInt int, location string) string {
 	return fmt.Sprintf(`
 resource "azurerm_resource_group" "test" {
@@ -2629,14 +2774,14 @@ resource "azurerm_virtual_machine_scale_set" "test" {
   identity {
     type     = "systemAssigned"
   }
-  
+
   extension {
     name                       = "MSILinuxExtension"
     publisher                  = "Microsoft.ManagedIdentity"
     type                       = "ManagedIdentityExtensionForLinux"
     type_handler_version       = "1.0"
     settings                   = "{\"port\": 50342}"
-  }  
+  }
 
   os_profile {
     computer_name_prefix = "testvm-%d"

@@ -87,9 +87,50 @@ func resourceArmVirtualMachineScaleSet() *schema.Resource {
 				Set: resourceArmVirtualMachineScaleSetSkuHash,
 			},
 
+			"automatic_os_upgrade": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
 			"upgrade_policy_mode": {
 				Type:     schema.TypeString,
 				Required: true,
+			},
+
+			"rolling_upgrade_policy": {
+				Type:     schema.TypeSet,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"max_batch_instance_percent": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  20,
+						},
+
+						"max_unhealthy_instance_percent": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  20,
+						},
+
+						"max_unhealthy_upgraded_instance_percent": {
+							Type:     schema.TypeInt,
+							Optional: true,
+							Default:  5,
+						},
+
+						"pause_time_between_batches": {
+							Type:     schema.TypeString,
+							Optional: true,
+							Default:  "PT0S",
+						},
+					},
+				},
+				Set: resourceArmVirtualMachineScaleSetRollingUpgradePolicyHash,
 			},
 
 			"overprovision": {
@@ -281,6 +322,11 @@ func resourceArmVirtualMachineScaleSet() *schema.Resource {
 						},
 
 						"network_security_group_id": {
+							Type:     schema.TypeString,
+							Optional: true,
+						},
+
+						"health_probe_id": {
 							Type:     schema.TypeString,
 							Optional: true,
 						},
@@ -638,12 +684,15 @@ func resourceArmVirtualMachineScaleSetCreate(d *schema.ResourceData, meta interf
 	}
 
 	updatePolicy := d.Get("upgrade_policy_mode").(string)
+	automaticOsUpgrade := d.Get("automatic_os_upgrade").(bool)
 	overprovision := d.Get("overprovision").(bool)
 	singlePlacementGroup := d.Get("single_placement_group").(bool)
 
 	scaleSetProps := compute.VirtualMachineScaleSetProperties{
 		UpgradePolicy: &compute.UpgradePolicy{
-			Mode: compute.UpgradeMode(updatePolicy),
+			Mode:                 compute.UpgradeMode(updatePolicy),
+			AutomaticOSUpgrade:   &automaticOsUpgrade,
+			RollingUpgradePolicy: expandAzureRmRollingUpgradePolicy(d),
 		},
 		VirtualMachineProfile: &compute.VirtualMachineScaleSetVMProfile{
 			NetworkProfile:   expandAzureRmVirtualMachineScaleSetNetworkProfile(d),
@@ -744,6 +793,7 @@ func resourceArmVirtualMachineScaleSetRead(d *schema.ResourceData, meta interfac
 	properties := resp.VirtualMachineScaleSetProperties
 
 	d.Set("upgrade_policy_mode", properties.UpgradePolicy.Mode)
+	d.Set("automatic_os_upgrade", properties.UpgradePolicy.AutomaticOSUpgrade)
 	d.Set("overprovision", properties.Overprovision)
 	d.Set("single_placement_group", properties.SinglePlacementGroup)
 
@@ -777,6 +827,12 @@ func resourceArmVirtualMachineScaleSetRead(d *schema.ResourceData, meta interfac
 	if properties.VirtualMachineProfile.OsProfile.LinuxConfiguration != nil {
 		if err := d.Set("os_profile_linux_config", flattenAzureRmVirtualMachineScaleSetOsProfileLinuxConfig(properties.VirtualMachineProfile.OsProfile.LinuxConfiguration)); err != nil {
 			return fmt.Errorf("[DEBUG] Error setting Virtual Machine Scale Set OS Profile Linux config error: %#v", err)
+		}
+	}
+
+	if properties.UpgradePolicy.RollingUpgradePolicy != nil {
+		if err := d.Set("rolling_upgrade_policy", flattenAzureRmVirtualMachineScaleSetRollingUpgradePolicy(properties.UpgradePolicy.RollingUpgradePolicy)); err != nil {
+			return fmt.Errorf("[DEBUG] Error setting Virtual Machine Scale Set Rolling Upgrade Policy error: %#v", err)
 		}
 	}
 
@@ -965,6 +1021,17 @@ func flattenAzureRmVirtualMachineScaleSetBootDiagnostics(bootDiagnostic *compute
 	return []interface{}{b}
 }
 
+func flattenAzureRmVirtualMachineScaleSetRollingUpgradePolicy(rollingUpgradePolicy *compute.RollingUpgradePolicy) []interface{} {
+	b := map[string]interface{}{
+		"max_batch_instance_percent":              *rollingUpgradePolicy.MaxBatchInstancePercent,
+		"max_unhealthy_instance_percent":          *rollingUpgradePolicy.MaxUnhealthyInstancePercent,
+		"max_unhealthy_upgraded_instance_percent": *rollingUpgradePolicy.MaxUnhealthyUpgradedInstancePercent,
+		"pause_time_between_batches":              *rollingUpgradePolicy.PauseTimeBetweenBatches,
+	}
+
+	return []interface{}{b}
+}
+
 func flattenAzureRmVirtualMachineScaleSetNetworkProfile(profile *compute.VirtualMachineScaleSetNetworkProfile) []map[string]interface{} {
 	networkConfigurations := profile.NetworkInterfaceConfigurations
 	result := make([]map[string]interface{}, 0, len(*networkConfigurations))
@@ -972,6 +1039,10 @@ func flattenAzureRmVirtualMachineScaleSetNetworkProfile(profile *compute.Virtual
 		s := map[string]interface{}{
 			"name":    *netConfig.Name,
 			"primary": *netConfig.VirtualMachineScaleSetNetworkConfigurationProperties.Primary,
+		}
+
+		if v := profile.HealthProbe; v != nil {
+			s["health_probe_id"] = *v.ID
 		}
 
 		if v := netConfig.VirtualMachineScaleSetNetworkConfigurationProperties.EnableAcceleratedNetworking; v != nil {
@@ -1240,6 +1311,16 @@ func resourceArmVirtualMachineScaleSetStorageProfileOsDiskHash(v interface{}) in
 	return hashcode.String(buf.String())
 }
 
+func resourceArmVirtualMachineScaleSetRollingUpgradePolicyHash(v interface{}) int {
+	var buf bytes.Buffer
+	m := v.(map[string]interface{})
+	buf.WriteString(fmt.Sprintf("%d-", m["max_batch_instance_percent"].(int)))
+	buf.WriteString(fmt.Sprintf("%d-", m["max_unhealthy_instance_percent"].(int)))
+	buf.WriteString(fmt.Sprintf("%d-", m["max_unhealthy_upgraded_instance_percent"].(int)))
+	buf.WriteString(fmt.Sprintf("%s-", m["pause_time_between_batches"].(string)))
+	return hashcode.String(buf.String())
+}
+
 func resourceArmVirtualMachineScaleSetNetworkConfigurationHash(v interface{}) int {
 	var buf bytes.Buffer
 
@@ -1326,9 +1407,31 @@ func expandVirtualMachineScaleSetSku(d *schema.ResourceData) (*compute.Sku, erro
 	return sku, nil
 }
 
+func expandAzureRmRollingUpgradePolicy(d *schema.ResourceData) *compute.RollingUpgradePolicy {
+	rollingUpgradePolicyConfigs := d.Get("rolling_upgrade_policy").(*schema.Set).List()
+	rollingUpgradePolicyConfig := rollingUpgradePolicyConfigs[0]
+	config := rollingUpgradePolicyConfig.(map[string]interface{})
+
+	maxBatchInstancePercent := int32(config["max_batch_instance_percent"].(int))
+	maxUnhealthyInstancePercent := int32(config["max_unhealthy_instance_percent"].(int))
+	maxUnhealthyUpgradedInstancePercent := int32(config["max_unhealthy_upgraded_instance_percent"].(int))
+	pauseTimeBetweenBatches := config["pause_time_between_batches"].(string)
+
+	return &compute.RollingUpgradePolicy{
+		MaxBatchInstancePercent:             &maxBatchInstancePercent,
+		MaxUnhealthyInstancePercent:         &maxUnhealthyInstancePercent,
+		MaxUnhealthyUpgradedInstancePercent: &maxUnhealthyUpgradedInstancePercent,
+		PauseTimeBetweenBatches:             &pauseTimeBetweenBatches,
+	}
+}
+
 func expandAzureRmVirtualMachineScaleSetNetworkProfile(d *schema.ResourceData) *compute.VirtualMachineScaleSetNetworkProfile {
 	scaleSetNetworkProfileConfigs := d.Get("network_profile").(*schema.Set).List()
-	networkProfileConfig := make([]compute.VirtualMachineScaleSetNetworkConfiguration, 0, len(scaleSetNetworkProfileConfigs))
+	networkConfigurations := make([]compute.VirtualMachineScaleSetNetworkConfiguration, 0, len(scaleSetNetworkProfileConfigs))
+
+	npProfileConfig := scaleSetNetworkProfileConfigs[0].(map[string]interface{})
+	healthProbe := npProfileConfig["health_probe_id"].(string)
+	fmt.Printf("The healthprobe is %v", healthProbe)
 
 	for _, npProfileConfig := range scaleSetNetworkProfileConfigs {
 		config := npProfileConfig.(map[string]interface{})
@@ -1438,11 +1541,14 @@ func expandAzureRmVirtualMachineScaleSetNetworkProfile(d *schema.ResourceData) *
 			nProfile.VirtualMachineScaleSetNetworkConfigurationProperties.NetworkSecurityGroup = &networkSecurityGroupId
 		}
 
-		networkProfileConfig = append(networkProfileConfig, nProfile)
+		networkConfigurations = append(networkConfigurations, nProfile)
 	}
 
 	return &compute.VirtualMachineScaleSetNetworkProfile{
-		NetworkInterfaceConfigurations: &networkProfileConfig,
+		HealthProbe: &compute.APIEntityReference{
+			ID: &healthProbe,
+		},
+		NetworkInterfaceConfigurations: &networkConfigurations,
 	}
 }
 
