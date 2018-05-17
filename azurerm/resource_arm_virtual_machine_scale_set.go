@@ -1037,12 +1037,9 @@ func flattenAzureRmVirtualMachineScaleSetNetworkProfile(profile *compute.Virtual
 	result := make([]map[string]interface{}, 0, len(*networkConfigurations))
 	for _, netConfig := range *networkConfigurations {
 		s := map[string]interface{}{
-			"name":    *netConfig.Name,
-			"primary": *netConfig.VirtualMachineScaleSetNetworkConfigurationProperties.Primary,
-		}
-
-		if v := profile.HealthProbe; v != nil {
-			s["health_probe_id"] = *v.ID
+			"name":            *netConfig.Name,
+			"primary":         *netConfig.VirtualMachineScaleSetNetworkConfigurationProperties.Primary,
+			"health_probe_id": *profile.HealthProbe.ID,
 		}
 
 		if v := netConfig.VirtualMachineScaleSetNetworkConfigurationProperties.EnableAcceleratedNetworking; v != nil {
@@ -1431,7 +1428,6 @@ func expandAzureRmVirtualMachineScaleSetNetworkProfile(d *schema.ResourceData) *
 
 	npProfileConfig := scaleSetNetworkProfileConfigs[0].(map[string]interface{})
 	healthProbe := npProfileConfig["health_probe_id"].(string)
-	fmt.Printf("The healthprobe is %v", healthProbe)
 
 	for _, npProfileConfig := range scaleSetNetworkProfileConfigs {
 		config := npProfileConfig.(map[string]interface{})

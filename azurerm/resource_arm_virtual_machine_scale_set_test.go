@@ -375,7 +375,7 @@ func TestAccAzureRMVirtualMachineScaleSet_rollingUpgradePolicy(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testCheckAzureRMVirtualMachineScaleSetExists("azurerm_virtual_machine_scale_set.test"),
 					testCheckAzureRMVirtualMachineScaleSetHasLoadbalancer("azurerm_virtual_machine_scale_set.test"),
-					resource.TestCheckResourceAttr(resource_name, "automatic_os_upgrade", "true"),
+					resource.TestCheckResourceAttr(resource_name, "automatic_os_upgrade", "false"),
 					resource.TestCheckResourceAttr(resource_name, "upgrade_policy_mode", "Rolling"),
 					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.max_batch_instance_percent", "20"),
 					resource.TestCheckResourceAttr(resource_name, "rolling_upgrade_policy.max_unhealthy_instance_percent", "20"),
